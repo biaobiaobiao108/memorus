@@ -157,12 +157,18 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
+    let scroll_hint = if app.detail_scroll > 0 {
+        format!(" 详情预览 (📜 滚动 +{}) ", app.detail_scroll)
+    } else {
+        " 详情预览 ".to_string()
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
-            " 详情预览 ",
+            scroll_hint,
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         ));
 
@@ -268,8 +274,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Span::raw("删除 "),
         Span::styled("[/]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw("搜索 "),
-        Span::styled("[j/k/↑/↓/点击]", Style::default().fg(Color::Yellow)),
-        Span::raw("选择 "),
+        Span::styled("[滚轮/Space/u]", Style::default().fg(Color::Yellow)),
+        Span::raw("翻页 "),
         Span::styled("[q/Esc]", Style::default().fg(Color::DarkGray)),
         Span::raw("退出"),
     ]);
@@ -336,38 +342,60 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
     } else {
         Color::DarkGray
     };
+
+    let total_lines = app.edit_lines.len();
+    let visible_content_h = chunks[1].height.saturating_sub(2) as usize;
+
+    let max_scroll = if total_lines >= visible_content_h && visible_content_h > 0 {
+        total_lines - visible_content_h + 1
+    } else {
+        0
+    };
+    let final_scroll = (app.edit_scroll as usize).min(max_scroll);
+
+    let content_title = if final_scroll > 0 {
+        format!(" 内容 (支持多行 / 📜 滚动 +{}) ", final_scroll)
+    } else {
+        " 内容 (支持多行) ".to_string()
+    };
+
     let content_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(content_border_color))
         .title(Span::styled(
-            " 内容 (支持多行) ",
+            content_title,
             Style::default().fg(content_border_color).add_modifier(Modifier::BOLD),
         ));
 
-    let p_content = Paragraph::new(app.edit_content.as_str())
+    let content_text = app.edit_lines.join("\n");
+    let p_content = Paragraph::new(content_text)
         .block(content_block)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((final_scroll as u16, 0));
     f.render_widget(p_content, chunks[1]);
 
-    // 3. 硬件光标定位（IME / 中文输入法定位关键）
+    // 3. 硬件光标精确定位（IME / 中文输入法与任意位置编辑）
     match app.edit_focus {
         EditFocus::Title => {
-            let title_w = UnicodeWidthStr::width(app.edit_title.as_str()) as u16;
-            let cursor_x = (chunks[0].x + 1 + title_w).min(chunks[0].right().saturating_sub(2));
+            let before_cursor: String = app.edit_title.chars().take(app.title_cursor).collect();
+            let cursor_w = UnicodeWidthStr::width(before_cursor.as_str()) as u16;
+            let cursor_x = (chunks[0].x + 1 + cursor_w).min(chunks[0].right().saturating_sub(2));
             let cursor_y = chunks[0].y + 1;
             f.set_cursor_position((cursor_x, cursor_y));
         }
         EditFocus::Content => {
-            let lines: Vec<&str> = app.edit_content.split('\n').collect();
-            let line_count = lines.len().saturating_sub(1) as u16;
-            let last_line = lines.last().copied().unwrap_or("");
-            let last_line_w = UnicodeWidthStr::width(last_line) as u16;
+            if app.cursor_row < app.edit_lines.len() {
+                let current_line = &app.edit_lines[app.cursor_row];
+                let before_cursor: String = current_line.chars().take(app.cursor_col).collect();
+                let cursor_w = UnicodeWidthStr::width(before_cursor.as_str()) as u16;
 
-            let max_y = chunks[1].bottom().saturating_sub(2);
-            let cursor_y = (chunks[1].y + 1 + line_count).min(max_y);
-            let cursor_x = (chunks[1].x + 1 + last_line_w).min(chunks[1].right().saturating_sub(2));
-            f.set_cursor_position((cursor_x, cursor_y));
+                if app.cursor_row >= final_scroll && app.cursor_row < final_scroll + visible_content_h {
+                    let cursor_y = chunks[1].y + 1 + (app.cursor_row - final_scroll) as u16;
+                    let cursor_x = (chunks[1].x + 1 + cursor_w).min(chunks[1].right().saturating_sub(2));
+                    f.set_cursor_position((cursor_x, cursor_y));
+                }
+            }
         }
     }
 
@@ -375,6 +403,8 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
     let tip = Line::from(vec![
         Span::styled("[Tab]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         Span::raw(" 切换标题/内容  "),
+        Span::styled("[滚轮/PageUp/Down]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" 滚动长文  "),
         Span::styled("[Ctrl+S]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
         Span::raw(" 保存  "),
         Span::styled("[Esc]", Style::default().fg(Color::DarkGray)),
