@@ -14,3 +14,10 @@ chrono = { version = "0.4", features = ["serde"] }
 directories = "5.0"
 anyhow = "1.0"
 unicode-width = "0.2"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+
