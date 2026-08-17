@@ -1,14 +1,22 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 
 use crate::tui::app::{App, AppMode, EditFocus};
 
 pub fn handle_events(app: &mut App) -> Result<()> {
     if event::poll(Duration::from_millis(50))? {
-        if let Event::Key(key) = event::read()? {
-            handle_key_event(app, key)?;
+        match event::read()? {
+            Event::Key(key) => handle_key_event(app, key)?,
+            Event::Mouse(mouse) => {
+                if app.mode == AppMode::Normal {
+                    if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                        app.select_at_row(mouse.row);
+                    }
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -16,7 +24,7 @@ pub fn handle_events(app: &mut App) -> Result<()> {
 
 fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
     match app.mode {
-        AppMode::Normal => handle_normal_mode_key(app, key),
+        AppMode::Normal => handle_normal_mode_key(app, key)?,
         AppMode::Editing => handle_editing_mode_key(app, key)?,
         AppMode::DeleteConfirm => handle_delete_confirm_mode_key(app, key)?,
         AppMode::Searching => handle_searching_mode_key(app, key),
@@ -24,7 +32,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
     Ok(())
 }
 
-fn handle_normal_mode_key(app: &mut App, key: KeyEvent) {
+fn handle_normal_mode_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Char('q') => app.should_quit = true,
         KeyCode::Esc => {
@@ -39,12 +47,16 @@ fn handle_normal_mode_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('u') | KeyCode::PageUp => app.scroll_detail_up(),
         KeyCode::Char(' ') | KeyCode::PageDown => app.scroll_detail_down(),
 
-        KeyCode::Char('n') => app.start_create(),
+        KeyCode::Tab => app.toggle_list_filter(),
+        KeyCode::Char('g') | KeyCode::Char('G') => app.toggle_archive()?,
+
+        KeyCode::Char('a') | KeyCode::Char('n') => app.start_create(),
         KeyCode::Char('e') | KeyCode::Enter => app.start_edit(),
         KeyCode::Char('d') | KeyCode::Delete => app.prompt_delete(),
         KeyCode::Char('/') => app.start_search(),
         _ => {}
     }
+    Ok(())
 }
 
 fn handle_editing_mode_key(app: &mut App, key: KeyEvent) -> Result<()> {

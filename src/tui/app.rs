@@ -6,6 +6,12 @@ use crate::db::Database;
 use crate::model::Memo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListFilter {
+    Active,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppMode {
     Normal,
     Editing,
@@ -25,6 +31,7 @@ pub struct App {
     pub filtered_indices: Vec<usize>,
     pub selected_index: usize,
     pub detail_scroll: u16,
+    pub list_filter: ListFilter,
 
     pub mode: AppMode,
     pub edit_target_id: Option<i64>,
@@ -45,6 +52,7 @@ impl App {
             filtered_indices: Vec::new(),
             selected_index: 0,
             detail_scroll: 0,
+            list_filter: ListFilter::Active,
 
             mode: AppMode::Normal,
             edit_target_id: None,
@@ -67,23 +75,28 @@ impl App {
         Ok(())
     }
 
-    /// 根据当前搜索词过滤列表
+    /// 根据当前归档过滤器和搜索词过滤列表
     pub fn apply_filter(&mut self) {
-        if self.search_query.trim().is_empty() {
-            self.filtered_indices = (0..self.memos.len()).collect();
-        } else {
-            let query = self.search_query.to_lowercase();
-            self.filtered_indices = self
-                .memos
-                .iter()
-                .enumerate()
-                .filter(|(_, m)| {
+        let query = self.search_query.to_lowercase();
+        let target_archived = self.list_filter == ListFilter::Archived;
+
+        self.filtered_indices = self
+            .memos
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                if m.archived != target_archived {
+                    return false;
+                }
+                if query.trim().is_empty() {
+                    true
+                } else {
                     m.title.to_lowercase().contains(&query)
                         || m.content.to_lowercase().contains(&query)
-                })
-                .map(|(idx, _)| idx)
-                .collect();
-        }
+                }
+            })
+            .map(|(idx, _)| idx)
+            .collect();
 
         if self.filtered_indices.is_empty() {
             self.selected_index = 0;
@@ -91,6 +104,42 @@ impl App {
             self.selected_index = self.filtered_indices.len().saturating_sub(1);
         }
         self.detail_scroll = 0;
+    }
+
+    pub fn toggle_list_filter(&mut self) {
+        self.list_filter = match self.list_filter {
+            ListFilter::Active => ListFilter::Archived,
+            ListFilter::Archived => ListFilter::Active,
+        };
+        self.apply_filter();
+        self.selected_index = 0;
+    }
+
+    pub fn toggle_archive(&mut self) -> Result<()> {
+        if let Some(memo) = self.selected_memo().cloned() {
+            let target_archived = !memo.archived;
+            self.db.set_archived(memo.id, target_archived)?;
+            if target_archived {
+                self.set_status(format!("📦 备忘录《{}》已归档", memo.title));
+            } else {
+                self.set_status(format!("📥 备忘录《{}》已取消归档", memo.title));
+            }
+            self.reload_memos()?;
+        } else {
+            self.set_status("⚠️ 当前没有选中的备忘录可操作");
+        }
+        Ok(())
+    }
+
+    pub fn select_at_row(&mut self, row: u16) {
+        // 主体双栏内容区从 y = 1 开始，列表上方有 border (y = 1)，列表项从 y = 2 开始
+        if row >= 2 {
+            let item_idx = (row - 2) as usize;
+            if item_idx < self.filtered_indices.len() {
+                self.selected_index = item_idx;
+                self.detail_scroll = 0;
+            }
+        }
     }
 
     /// 获取当前选中的备忘录引用
@@ -285,7 +334,22 @@ mod tests {
 
         assert_eq!(app.selected_memo().unwrap().title, "修改后的标题");
 
-        // 5. 删除
+        // 5. 归档测试
+        app.toggle_archive()?;
+        assert_eq!(app.filtered_indices.len(), 1); // 活动列表中只剩 1 条
+
+        // Tab 切换到归档列表
+        app.toggle_list_filter();
+        assert_eq!(app.list_filter, ListFilter::Archived);
+        assert_eq!(app.filtered_indices.len(), 1); // 归档列表中有 1 条
+
+        // 取消归档
+        app.toggle_archive()?;
+        assert_eq!(app.filtered_indices.len(), 0); // 归档列表变空
+        app.toggle_list_filter();
+        assert_eq!(app.filtered_indices.len(), 2); // 活动列表恢复 2 条
+
+        // 6. 删除
         app.prompt_delete();
         assert_eq!(app.mode, AppMode::DeleteConfirm);
         app.confirm_delete()?;

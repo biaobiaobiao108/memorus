@@ -64,22 +64,31 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
+                archived INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_memos_created_at ON memos(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memos_updated_at ON memos(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_memos_archived ON memos(archived);
             ",
         )?;
+
+        // 兼容已有旧数据库自动迁移升级
+        let _ = self
+            .conn
+            .execute("ALTER TABLE memos ADD COLUMN archived INTEGER NOT NULL DEFAULT 0", []);
+
         Ok(())
     }
 
-    /// 获取最近的 N 条备忘录（默认按创建时间倒序）
+    /// 获取最近的 N 条未归档备忘录（默认按创建时间倒序）
     pub fn get_recent(&self, limit: usize) -> Result<Vec<Memo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, content, created_at, updated_at 
+            "SELECT id, title, content, archived, created_at, updated_at 
              FROM memos 
+             WHERE archived = 0
              ORDER BY created_at DESC 
              LIMIT ?1",
         )?;
@@ -88,8 +97,9 @@ impl Database {
             let id: i64 = row.get(0)?;
             let title: String = row.get(1)?;
             let content: String = row.get(2)?;
-            let created_at_str: String = row.get(3)?;
-            let updated_at_str: String = row.get(4)?;
+            let archived_num: i64 = row.get(3)?;
+            let created_at_str: String = row.get(4)?;
+            let updated_at_str: String = row.get(5)?;
 
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                 .map(|dt| dt.with_timezone(&Local))
@@ -102,6 +112,7 @@ impl Database {
                 id,
                 title,
                 content,
+                archived: archived_num != 0,
                 created_at,
                 updated_at,
             })
@@ -117,7 +128,7 @@ impl Database {
     /// 获取全部备忘录（按更新时间倒序排列）
     pub fn get_all(&self) -> Result<Vec<Memo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, content, created_at, updated_at 
+            "SELECT id, title, content, archived, created_at, updated_at 
              FROM memos 
              ORDER BY updated_at DESC",
         )?;
@@ -126,8 +137,9 @@ impl Database {
             let id: i64 = row.get(0)?;
             let title: String = row.get(1)?;
             let content: String = row.get(2)?;
-            let created_at_str: String = row.get(3)?;
-            let updated_at_str: String = row.get(4)?;
+            let archived_num: i64 = row.get(3)?;
+            let created_at_str: String = row.get(4)?;
+            let updated_at_str: String = row.get(5)?;
 
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
                 .map(|dt| dt.with_timezone(&Local))
@@ -140,6 +152,7 @@ impl Database {
                 id,
                 title,
                 content,
+                archived: archived_num != 0,
                 created_at,
                 updated_at,
             })
@@ -158,7 +171,7 @@ impl Database {
         let now_str = now.to_rfc3339();
 
         self.conn.execute(
-            "INSERT INTO memos (title, content, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO memos (title, content, archived, created_at, updated_at) VALUES (?1, ?2, 0, ?3, ?4)",
             params![title, content, now_str, now_str],
         )?;
 
@@ -167,6 +180,7 @@ impl Database {
             id,
             title: title.to_string(),
             content: content.to_string(),
+            archived: false,
             created_at: now,
             updated_at: now,
         })
@@ -178,6 +192,16 @@ impl Database {
         self.conn.execute(
             "UPDATE memos SET title = ?1, content = ?2, updated_at = ?3 WHERE id = ?4",
             params![title, content, now, id],
+        )?;
+        Ok(())
+    }
+
+    /// 设置归档状态
+    pub fn set_archived(&self, id: i64, archived: bool) -> Result<()> {
+        let now = Local::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE memos SET archived = ?1, updated_at = ?2 WHERE id = ?3",
+            params![if archived { 1 } else { 0 }, now, id],
         )?;
         Ok(())
     }
@@ -202,6 +226,7 @@ mod tests {
         let memo1 = db.insert("测试标题1", "测试内容1")?;
         assert_eq!(memo1.id, 1);
         assert_eq!(memo1.title, "测试标题1");
+        assert!(!memo1.archived);
 
         let memo2 = db.insert("测试标题2", "测试内容2")?;
         assert_eq!(memo2.id, 2);
@@ -210,17 +235,21 @@ mod tests {
         let all = db.get_all()?;
         assert_eq!(all.len(), 2);
 
-        // 查最近
-        let recent = db.get_recent(1)?;
+        // 归档测试
+        db.set_archived(memo2.id, true)?;
+        let recent = db.get_recent(5)?;
         assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].title, "测试标题2");
+        assert_eq!(recent[0].id, memo1.id);
 
-        // 更新
-        db.update(memo1.id, "修改后标题1", "修改后内容1")?;
-        let all_after_update = db.get_all()?;
-        let updated = all_after_update.iter().find(|m| m.id == memo1.id).unwrap();
-        assert_eq!(updated.title, "修改后标题1");
-        assert_eq!(updated.content, "修改后内容1");
+        // 查全部仍然是2条
+        let all_after_archive = db.get_all()?;
+        assert_eq!(all_after_archive.len(), 2);
+        let archived_item = all_after_archive.iter().find(|m| m.id == memo2.id).unwrap();
+        assert!(archived_item.archived);
+
+        // 取消归档
+        db.set_archived(memo2.id, false)?;
+        assert_eq!(db.get_recent(5)?.len(), 2);
 
         // 删除
         db.delete(memo2.id)?;

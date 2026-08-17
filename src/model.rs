@@ -5,6 +5,7 @@ pub struct Memo {
     pub id: i64,
     pub title: String,
     pub content: String,
+    pub archived: bool,
     pub created_at: DateTime<Local>,
     pub updated_at: DateTime<Local>,
 }
