@@ -58,27 +58,32 @@ impl Database {
 
     /// 初始化数据表与索引
     fn init_schema(&self) -> Result<()> {
-        self.conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS memos (
+        // 1. 创建基础表
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS memos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT NOT NULL,
                 content TEXT NOT NULL,
                 archived INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
-            );
+            );",
+            [],
+        )?;
 
+        // 2. 兼容已有旧数据库自动迁移升级：确保存在 archived 列
+        let _ = self
+            .conn
+            .execute("ALTER TABLE memos ADD COLUMN archived INTEGER NOT NULL DEFAULT 0", []);
+
+        // 3. 创建各字段索引（确保 archived 列存在后再建索引）
+        self.conn.execute_batch(
+            "
             CREATE INDEX IF NOT EXISTS idx_memos_created_at ON memos(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memos_updated_at ON memos(updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memos_archived ON memos(archived);
             ",
         )?;
-
-        // 兼容已有旧数据库自动迁移升级
-        let _ = self
-            .conn
-            .execute("ALTER TABLE memos ADD COLUMN archived INTEGER NOT NULL DEFAULT 0", []);
 
         Ok(())
     }
@@ -259,4 +264,39 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_legacy_database_migration() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        // 模拟 v0.1.0 旧表结构（无 archived 列）
+        conn.execute_batch(
+            "CREATE TABLE memos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO memos (title, content, created_at, updated_at) 
+            VALUES ('旧备忘录', '旧内容', '2026-08-18T00:00:00+08:00', '2026-08-18T00:00:00+08:00');
+            ",
+        )?;
+
+        // 初始化 schema 执行迁移
+        let db = Database { conn };
+        db.init_schema()?;
+
+        // 验证旧数据依然完好，并且默认未归档
+        let all = db.get_all()?;
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].title, "旧备忘录");
+        assert!(!all[0].archived);
+
+        // 归档操作
+        db.set_archived(all[0].id, true)?;
+        assert_eq!(db.get_recent(5)?.len(), 0);
+
+        Ok(())
+    }
 }
+
