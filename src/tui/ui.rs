@@ -1,0 +1,412 @@
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{
+        Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
+    },
+    Frame,
+};
+
+use unicode_width::UnicodeWidthStr;
+
+use crate::tui::app::{App, AppMode, EditFocus};
+
+pub fn draw(f: &mut Frame, app: &mut App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // 顶部标题栏
+            Constraint::Min(10),   // 主体双栏
+            Constraint::Length(2), // 底部操作/状态栏
+        ])
+        .split(f.area());
+
+    // 1. 顶部标题条
+    draw_header(f, chunks[0]);
+
+    // 2. 主体左右分栏
+    let main_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(chunks[1]);
+
+    draw_list(f, app, main_chunks[0]);
+    draw_detail(f, app, main_chunks[1]);
+
+    // 3. 底部状态与快捷键提示
+    draw_footer(f, app, chunks[2]);
+
+    // 4. 浮层弹窗
+    match app.mode {
+        AppMode::Editing => draw_edit_modal(f, app),
+        AppMode::DeleteConfirm => draw_delete_confirm_modal(f, app),
+        _ => {}
+    }
+}
+
+fn draw_header(f: &mut Frame, area: Rect) {
+    let header_text = Line::from(vec![
+        Span::styled(" 📝 MEMOS ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" 极速终端备忘录"),
+    ]);
+    f.render_widget(Paragraph::new(header_text), area);
+}
+
+fn draw_list(f: &mut Frame, app: &App, area: Rect) {
+    let list_title = if app.search_query.is_empty() {
+        format!(" 备忘录列表 ({}) ", app.filtered_indices.len())
+    } else {
+        format!(" 搜索结果 ({}/{}) ", app.filtered_indices.len(), app.memos.len())
+    };
+
+    let items: Vec<ListItem> = app
+        .filtered_indices
+        .iter()
+        .enumerate()
+        .filter_map(|(ui_idx, &real_idx)| {
+            let memo = app.memos.get(real_idx)?;
+            let time_str = memo.updated_at.format("%m-%d %H:%M").to_string();
+            let is_selected = ui_idx == app.selected_index;
+
+            let prefix = if is_selected { "▶ " } else { "  " };
+            let title_display = if memo.title.chars().count() > 18 {
+                let s: String = memo.title.chars().take(16).collect();
+                format!("{}...", s)
+            } else {
+                memo.title.clone()
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    prefix,
+                    if is_selected {
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ),
+                Span::styled(
+                    format!("[{}] ", time_str),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    title_display,
+                    if is_selected {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                ),
+            ]);
+
+            Some(ListItem::new(line))
+        })
+        .collect();
+
+    let list_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(
+            list_title,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+
+    if items.is_empty() {
+        let empty_tip = if app.memos.is_empty() {
+            "暂无备忘录\n按 [n] 创建第一条"
+        } else {
+            "未找到匹配的备忘录\n按 [Esc] 清除搜索"
+        };
+        let p = Paragraph::new(empty_tip)
+            .block(list_block)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(p, area);
+    } else {
+        let mut state = ListState::default();
+        state.select(Some(app.selected_index));
+
+        let list_widget = List::new(items)
+            .block(list_block)
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Rgb(35, 45, 60))
+                    .add_modifier(Modifier::BOLD),
+            );
+        f.render_stateful_widget(list_widget, area, &mut state);
+    }
+}
+
+fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(
+            " 详情预览 ",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ));
+
+    if let Some(memo) = app.selected_memo() {
+        let created_str = memo.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
+        let updated_str = memo.updated_at.format("%Y-%m-%d %H:%M:%S").to_string();
+
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("📌 标题: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(&memo.title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("🕒 创建: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(created_str, Style::default().fg(Color::Gray)),
+                Span::raw("   "),
+                Span::styled("🔄 更新: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(updated_str, Style::default().fg(Color::Gray)),
+            ]),
+            Line::from(Span::styled(
+                "─".repeat(area.width.saturating_sub(4) as usize),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+        ];
+
+        for line_str in memo.content.lines() {
+            lines.push(Line::from(Span::raw(line_str)));
+        }
+
+        if memo.content.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "(正文内容为空)",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        let p = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .scroll((app.detail_scroll, 0));
+        f.render_widget(p, area);
+    } else {
+        let p = Paragraph::new("请选择左侧备忘录查看详情")
+            .block(block)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(p, area);
+    }
+}
+
+fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    if let Some(status) = app.get_active_status() {
+        let status_line = Line::from(vec![
+            Span::styled(" 📢 ", Style::default().fg(Color::Yellow)),
+            Span::styled(status, Style::default().fg(Color::LightYellow)),
+        ]);
+        f.render_widget(Paragraph::new(status_line), area);
+        return;
+    }
+
+    if app.mode == AppMode::Searching {
+        let prefix = " 🔍 搜索: ";
+        let prefix_w = UnicodeWidthStr::width(prefix) as u16;
+        let query_w = UnicodeWidthStr::width(app.search_query.as_str()) as u16;
+        let cursor_x = (area.x + prefix_w + query_w).min(area.right().saturating_sub(1));
+        let cursor_y = area.y;
+        f.set_cursor_position((cursor_x, cursor_y));
+
+        let search_line = Line::from(vec![
+            Span::styled(prefix, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(&app.search_query, Style::default().fg(Color::Yellow)),
+            Span::styled(" (按 Enter 锁定，Esc 取消)", Style::default().fg(Color::DarkGray)),
+        ]);
+        f.render_widget(Paragraph::new(search_line), area);
+        return;
+    }
+
+    let help_line = Line::from(vec![
+        Span::styled("[n]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("新建 "),
+        Span::styled("[e]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("编辑 "),
+        Span::styled("[d]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::raw("删除 "),
+        Span::styled("[/]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("搜索 "),
+        Span::styled("[j/k/↑/↓]", Style::default().fg(Color::Yellow)),
+        Span::raw("移动 "),
+        Span::styled("[u/d]", Style::default().fg(Color::Yellow)),
+        Span::raw("正文翻页 "),
+        Span::styled("[q/Esc]", Style::default().fg(Color::DarkGray)),
+        Span::raw("退出"),
+    ]);
+
+    f.render_widget(Paragraph::new(help_line), area);
+}
+
+fn draw_edit_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(70, 75, f.area());
+    f.render_widget(Clear, area);
+
+    let modal_title = if app.edit_target_id.is_some() {
+        " ✏️ 编辑备忘录 "
+    } else {
+        " ➕ 新建备忘录 "
+    };
+
+    let main_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            modal_title,
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ));
+    f.render_widget(main_block, area);
+
+    let inner_area = Rect {
+        x: area.x + 2,
+        y: area.y + 1,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(2),
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // 标题输入框
+            Constraint::Min(6),    // 内容多行输入框
+            Constraint::Length(1), // 底部提示
+        ])
+        .split(inner_area);
+
+    // 1. 标题输入框
+    let title_border_color = if app.edit_focus == EditFocus::Title {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+    let title_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(title_border_color))
+        .title(Span::styled(
+            " 标题 (必填) ",
+            Style::default().fg(title_border_color).add_modifier(Modifier::BOLD),
+        ));
+    let p_title = Paragraph::new(app.edit_title.as_str()).block(title_block);
+    f.render_widget(p_title, chunks[0]);
+
+    // 2. 内容输入框
+    let content_border_color = if app.edit_focus == EditFocus::Content {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+    let content_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(content_border_color))
+        .title(Span::styled(
+            " 内容 (支持多行) ",
+            Style::default().fg(content_border_color).add_modifier(Modifier::BOLD),
+        ));
+
+    let p_content = Paragraph::new(app.edit_content.as_str())
+        .block(content_block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(p_content, chunks[1]);
+
+    // 3. 硬件光标定位（IME / 中文输入法定位关键）
+    match app.edit_focus {
+        EditFocus::Title => {
+            let title_w = UnicodeWidthStr::width(app.edit_title.as_str()) as u16;
+            let cursor_x = (chunks[0].x + 1 + title_w).min(chunks[0].right().saturating_sub(2));
+            let cursor_y = chunks[0].y + 1;
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
+        EditFocus::Content => {
+            let lines: Vec<&str> = app.edit_content.split('\n').collect();
+            let line_count = lines.len().saturating_sub(1) as u16;
+            let last_line = lines.last().copied().unwrap_or("");
+            let last_line_w = UnicodeWidthStr::width(last_line) as u16;
+
+            let max_y = chunks[1].bottom().saturating_sub(2);
+            let cursor_y = (chunks[1].y + 1 + line_count).min(max_y);
+            let cursor_x = (chunks[1].x + 1 + last_line_w).min(chunks[1].right().saturating_sub(2));
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+
+    // 4. 操作帮助
+    let tip = Line::from(vec![
+        Span::styled("[Tab]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::raw(" 切换标题/内容  "),
+        Span::styled("[Ctrl+S]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::raw(" 保存  "),
+        Span::styled("[Esc]", Style::default().fg(Color::DarkGray)),
+        Span::raw(" 取消"),
+    ]);
+    f.render_widget(Paragraph::new(tip).alignment(Alignment::Center), chunks[2]);
+}
+
+fn draw_delete_confirm_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(50, 25, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Red))
+        .title(Span::styled(
+            " ⚠️ 删除确认 ",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+
+    let title_preview = app
+        .selected_memo()
+        .map(|m| m.title.as_str())
+        .unwrap_or("该备忘录");
+
+    let text = Text::from(vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("确定要删除备忘录「"),
+            Span::styled(title_preview, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("」吗？"),
+        ]),
+        Line::from(Span::styled("此操作不可恢复！", Style::default().fg(Color::Red))),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[y / Enter] 确认删除", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw("    "),
+            Span::styled("[n / Esc] 取消", Style::default().fg(Color::Gray)),
+        ]),
+    ]);
+
+    let p = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+    f.render_widget(p, area);
+}
+
+/// 计算居中弹窗 Rect
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
