@@ -16,27 +16,15 @@ pub fn handle_events(app: &mut App) -> Result<()> {
                     }
                     AppMode::Editing => {
                         if let Ok((term_w, term_h)) = crossterm::terminal::size() {
-                            let popup_w = term_w * 70 / 100;
-                            let popup_h = term_h * 75 / 100;
-                            let popup_x = (term_w.saturating_sub(popup_w)) / 2;
-                            let popup_y = (term_h.saturating_sub(popup_h)) / 2;
-
-                            let inner_x = popup_x + 2;
-                            let inner_y = popup_y + 1;
-                            let inner_w = popup_w.saturating_sub(4);
-                            let inner_h = popup_h.saturating_sub(2);
-
-                            // title_chunk
-                            let title_x = inner_x + 1;
-                            let title_y = inner_y + 1;
-                            let title_w = inner_w.saturating_sub(2);
+                            let title_x = 1;
+                            let title_y = 2;
+                            let title_w = term_w.saturating_sub(2);
                             let title_h = 1;
 
-                            // content_chunk (inner_y + 3 is the border of content block, so inner content starts at +4)
-                            let content_x = inner_x + 1;
-                            let content_y = inner_y + 4;
-                            let content_w = inner_w.saturating_sub(2);
-                            let content_h = inner_h.saturating_sub(5);
+                            let content_x = 1;
+                            let content_y = 5;
+                            let content_w = term_w.saturating_sub(3);
+                            let content_h = term_h.saturating_sub(6);
 
                             app.click_edit_modal(
                                 mouse.column,
@@ -50,12 +38,26 @@ pub fn handle_events(app: &mut App) -> Result<()> {
                 },
                 MouseEventKind::ScrollUp => match app.mode {
                     AppMode::Normal => app.scroll_detail_by(-3),
-                    AppMode::Editing => app.scroll_edit_viewport(-2),
+                    AppMode::Editing => {
+                        let content_w = if let Ok((term_w, _)) = crossterm::terminal::size() {
+                            term_w.saturating_sub(3).max(10)
+                        } else {
+                            70
+                        };
+                        app.scroll_edit_viewport(-2, content_w);
+                    }
                     _ => {}
                 },
                 MouseEventKind::ScrollDown => match app.mode {
                     AppMode::Normal => app.scroll_detail_by(3),
-                    AppMode::Editing => app.scroll_edit_viewport(2),
+                    AppMode::Editing => {
+                        let content_w = if let Ok((term_w, _)) = crossterm::terminal::size() {
+                            term_w.saturating_sub(3).max(10)
+                        } else {
+                            70
+                        };
+                        app.scroll_edit_viewport(2, content_w);
+                    }
                     _ => {}
                 },
                 _ => {}
@@ -125,11 +127,12 @@ fn handle_normal_mode_key(app: &mut App, key: KeyEvent) -> Result<()> {
 }
 
 fn handle_editing_mode_key(app: &mut App, key: KeyEvent) -> Result<()> {
-    let visible_h = if let Ok((_, term_h)) = crossterm::terminal::size() {
-        let popup_h = (term_h * 75 / 100).saturating_sub(2);
-        (popup_h.saturating_sub(5) as usize).max(3)
+    let (content_w, visible_h) = if let Ok((term_w, term_h)) = crossterm::terminal::size() {
+        let cw = term_w.saturating_sub(3).max(10);
+        let ch = (term_h.saturating_sub(6) as usize).max(3);
+        (cw, ch)
     } else {
-        10
+        (70, 10)
     };
 
     // 处理 Ctrl+S 保存
@@ -161,11 +164,11 @@ fn handle_editing_mode_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // 光标导航
         KeyCode::Left => {
             app.move_cursor_left();
-            app.ensure_cursor_visible(visible_h);
+            app.ensure_cursor_visible(visible_h, content_w);
         }
         KeyCode::Right => {
             app.move_cursor_right();
-            app.ensure_cursor_visible(visible_h);
+            app.ensure_cursor_visible(visible_h, content_w);
         }
         KeyCode::Up => app.move_cursor_up(),
         KeyCode::Down => app.move_cursor_down(visible_h),
@@ -177,21 +180,21 @@ fn handle_editing_mode_key(app: &mut App, key: KeyEvent) -> Result<()> {
         // 删除与换行
         KeyCode::Backspace => {
             app.delete_backspace();
-            app.ensure_cursor_visible(visible_h);
+            app.ensure_cursor_visible(visible_h, content_w);
         }
         KeyCode::Delete => {
             app.delete_forward();
-            app.ensure_cursor_visible(visible_h);
+            app.ensure_cursor_visible(visible_h, content_w);
         }
         KeyCode::Enter => {
             app.insert_newline();
-            app.ensure_cursor_visible(visible_h);
+            app.ensure_cursor_visible(visible_h, content_w);
         }
 
         // 字符输入
         KeyCode::Char(c) => {
             app.insert_char(c);
-            app.ensure_cursor_visible(visible_h);
+            app.ensure_cursor_visible(visible_h, content_w);
         }
         _ => {}
     }

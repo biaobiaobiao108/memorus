@@ -25,6 +25,14 @@ pub enum EditFocus {
     Content,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorLayout {
+    pub visual_cursor_row: usize,
+    pub visual_cursor_col: usize,
+    pub total_visual_lines: usize,
+    pub visual_lines: Vec<String>,
+}
+
 pub struct App {
     pub db: Database,
     pub memos: Vec<Memo>,
@@ -205,10 +213,68 @@ impl App {
         }
     }
 
+    /// 计算多行正文在当前宽度下的视觉折行布局与光标绝对视觉位置
+    pub fn compute_content_layout(&self, max_width: u16) -> CursorLayout {
+        let max_w = (max_width as usize).max(1);
+        let mut visual_lines = Vec::new();
+        let mut visual_cursor_row = 0;
+        let mut visual_cursor_col = 0;
+
+        for (r_idx, line) in self.edit_lines.iter().enumerate() {
+            let is_cursor_row = r_idx == self.cursor_row;
+
+            if line.is_empty() {
+                if is_cursor_row {
+                    visual_cursor_row = visual_lines.len();
+                    visual_cursor_col = 0;
+                }
+                visual_lines.push(String::new());
+                continue;
+            }
+
+            let mut current_visual_line = String::new();
+            let mut cur_w = 0;
+            let chars: Vec<char> = line.chars().collect();
+
+            for (c_idx, &c) in chars.iter().enumerate() {
+                let char_w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+                if cur_w + char_w > max_w && cur_w > 0 {
+                    visual_lines.push(current_visual_line);
+                    current_visual_line = String::new();
+                    cur_w = 0;
+                }
+
+                if is_cursor_row && c_idx == self.cursor_col {
+                    visual_cursor_row = visual_lines.len();
+                    visual_cursor_col = cur_w;
+                }
+
+                current_visual_line.push(c);
+                cur_w += char_w;
+            }
+
+            if is_cursor_row && self.cursor_col >= chars.len() {
+                visual_cursor_row = visual_lines.len();
+                visual_cursor_col = cur_w;
+            }
+
+            visual_lines.push(current_visual_line);
+        }
+
+        let total_visual_lines = visual_lines.len();
+
+        CursorLayout {
+            visual_cursor_row,
+            visual_cursor_col,
+            total_visual_lines,
+            visual_lines,
+        }
+    }
+
     /// 鼠标滚轮仅平滑滚动视口，不破坏光标所在位置
-    pub fn scroll_edit_viewport(&mut self, delta: i16) {
-        let total_lines = self.edit_lines.len();
-        if total_lines == 0 {
+    pub fn scroll_edit_viewport(&mut self, delta: i16, max_width: u16) {
+        let layout = self.compute_content_layout(max_width);
+        if layout.total_visual_lines == 0 {
             return;
         }
 
@@ -217,7 +283,7 @@ impl App {
             self.edit_scroll = self.edit_scroll.saturating_sub(abs_delta);
         } else {
             let step = delta as usize;
-            let max_scroll = total_lines.saturating_sub(1);
+            let max_scroll = layout.total_visual_lines.saturating_sub(1);
             self.edit_scroll = (self.edit_scroll as usize + step).min(max_scroll) as u16;
         }
     }
@@ -238,8 +304,7 @@ impl App {
                 self.cursor_col = self.cursor_col.min(line_len);
             }
         } else {
-            let max_scroll = total_lines.saturating_sub(1);
-            self.edit_scroll = (self.edit_scroll as usize + step).min(max_scroll) as u16;
+            self.edit_scroll = self.edit_scroll.saturating_add(step as u16);
             if self.edit_focus == EditFocus::Content {
                 self.cursor_row = (self.cursor_row + step).min(total_lines.saturating_sub(1));
                 let line_len = self.edit_lines[self.cursor_row].chars().count();
@@ -249,15 +314,16 @@ impl App {
     }
 
     /// 保证光标在可视区域内（在打字或修改内容时自动调用）
-    pub fn ensure_cursor_visible(&mut self, visible_h: usize) {
+    pub fn ensure_cursor_visible(&mut self, visible_h: usize, max_width: u16) {
         if self.edit_focus != EditFocus::Content || visible_h == 0 {
             return;
         }
+        let layout = self.compute_content_layout(max_width);
         let scroll = self.edit_scroll as usize;
-        if self.cursor_row < scroll {
-            self.edit_scroll = self.cursor_row as u16;
-        } else if self.cursor_row >= scroll + visible_h {
-            self.edit_scroll = (self.cursor_row.saturating_sub(visible_h) + 1) as u16;
+        if layout.visual_cursor_row < scroll {
+            self.edit_scroll = layout.visual_cursor_row as u16;
+        } else if layout.visual_cursor_row >= scroll + visible_h {
+            self.edit_scroll = (layout.visual_cursor_row.saturating_sub(visible_h) + 1) as u16;
         }
     }
 
@@ -560,15 +626,20 @@ impl App {
         // 点击在标题框
         if click_x >= tx && click_x < tx + tw && click_y >= ty && click_y < ty + th {
             self.edit_focus = EditFocus::Title;
-            let rel_x = click_x.saturating_sub(tx) as usize;
-            let mut acc_w = 0;
+            let target_visual_col = click_x.saturating_sub(tx) as usize;
+            let mut cur_w = 0;
             let mut target_idx = 0;
             for (idx, c) in self.edit_title.chars().enumerate() {
                 let char_w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
-                if acc_w + char_w / 2 >= rel_x {
+                if target_visual_col < cur_w + char_w {
+                    if target_visual_col <= cur_w + char_w / 2 {
+                        target_idx = idx;
+                    } else {
+                        target_idx = idx + 1;
+                    }
                     break;
                 }
-                acc_w += char_w;
+                cur_w += char_w;
                 target_idx = idx + 1;
             }
             self.title_cursor = target_idx.min(self.edit_title.chars().count());
@@ -578,31 +649,75 @@ impl App {
         // 点击在内容框
         if click_x >= cx && click_x < cx + cw && click_y >= cy && click_y < cy + ch {
             self.edit_focus = EditFocus::Content;
-            let rel_y = click_y.saturating_sub(cy);
-            let target_row = (self.edit_scroll as usize) + (rel_y as usize);
+            let target_visual_row = (self.edit_scroll as usize) + (click_y.saturating_sub(cy) as usize);
+            let target_visual_col = click_x.saturating_sub(cx) as usize;
+            let max_w = (cw as usize).max(1);
 
-            if target_row < self.edit_lines.len() {
-                self.cursor_row = target_row;
-            } else if !self.edit_lines.is_empty() {
-                self.cursor_row = self.edit_lines.len() - 1;
-            } else {
-                self.cursor_row = 0;
-                self.edit_lines.push(String::new());
-            }
+            let mut cur_visual_row = 0;
+            let mut found = false;
 
-            let rel_x = click_x.saturating_sub(cx) as usize;
-            let mut acc_w = 0;
-            let mut target_col = 0;
-            let line = &self.edit_lines[self.cursor_row];
-            for (idx, c) in line.chars().enumerate() {
-                let char_w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
-                if acc_w + char_w / 2 >= rel_x {
+            for (r_idx, line) in self.edit_lines.iter().enumerate() {
+                let chars: Vec<char> = line.chars().collect();
+                if chars.is_empty() {
+                    if cur_visual_row == target_visual_row {
+                        self.cursor_row = r_idx;
+                        self.cursor_col = 0;
+                        found = true;
+                        break;
+                    }
+                    cur_visual_row += 1;
+                    continue;
+                }
+
+                let mut cur_w = 0;
+                for (c_idx, &c) in chars.iter().enumerate() {
+                    let char_w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+                    if cur_w + char_w > max_w && cur_w > 0 {
+                        if cur_visual_row == target_visual_row {
+                            self.cursor_row = r_idx;
+                            self.cursor_col = c_idx;
+                            found = true;
+                            break;
+                        }
+                        cur_visual_row += 1;
+                        cur_w = 0;
+                    }
+
+                    if cur_visual_row == target_visual_row {
+                        if target_visual_col < cur_w + char_w {
+                            if target_visual_col <= cur_w + char_w / 2 {
+                                self.cursor_row = r_idx;
+                                self.cursor_col = c_idx;
+                            } else {
+                                self.cursor_row = r_idx;
+                                self.cursor_col = c_idx + 1;
+                            }
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    cur_w += char_w;
+                }
+
+                if found {
                     break;
                 }
-                acc_w += char_w;
-                target_col = idx + 1;
+
+                if cur_visual_row == target_visual_row {
+                    self.cursor_row = r_idx;
+                    self.cursor_col = chars.len();
+                    found = true;
+                    break;
+                }
+
+                cur_visual_row += 1;
             }
-            self.cursor_col = target_col.min(line.chars().count());
+
+            if !found && !self.edit_lines.is_empty() {
+                self.cursor_row = self.edit_lines.len() - 1;
+                self.cursor_col = self.edit_lines[self.cursor_row].chars().count();
+            }
         }
     }
 
@@ -791,7 +906,7 @@ mod tests {
         app.cursor_row = 2;
         app.edit_scroll = 0;
 
-        app.scroll_edit_viewport(5);
+        app.scroll_edit_viewport(5, 60);
         assert_eq!(app.edit_scroll, 5);
         assert_eq!(app.cursor_row, 2); // 光标位置保持不变
 
@@ -801,7 +916,7 @@ mod tests {
         assert_eq!(app.cursor_row, 7);
 
         // 输入字符时自动将视口拉回到光标所在处
-        app.ensure_cursor_visible(6);
+        app.ensure_cursor_visible(6, 60);
         assert!(app.edit_scroll <= app.cursor_row as u16);
 
         Ok(())

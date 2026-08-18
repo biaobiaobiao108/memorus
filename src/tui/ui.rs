@@ -13,6 +13,11 @@ use unicode_width::UnicodeWidthStr;
 use crate::tui::app::{App, AppMode, EditFocus};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    if app.mode == AppMode::Editing {
+        draw_editor_page(f, app, f.area());
+        return;
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -37,11 +42,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // 3. 底部状态与快捷键提示
     draw_footer(f, app, chunks[2]);
 
-    // 4. 浮层弹窗
-    match app.mode {
-        AppMode::Editing => draw_edit_modal(f, app),
-        AppMode::DeleteConfirm => draw_delete_confirm_modal(f, app),
-        _ => {}
+    // 4. 浮层弹窗 (仅删除确认等需要小弹窗的模式)
+    if app.mode == AppMode::DeleteConfirm {
+        draw_delete_confirm_modal(f, app);
     }
 }
 
@@ -283,43 +286,40 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(help_line), area);
 }
 
-fn draw_edit_modal(f: &mut Frame, app: &App) {
-    let area = centered_rect(70, 75, f.area());
-    f.render_widget(Clear, area);
+fn draw_editor_page(f: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // 顶部标题栏
+            Constraint::Length(3), // 标题输入框
+            Constraint::Min(6),    // 内容多行输入框 (占据全屏主要高度)
+            Constraint::Length(1), // 底部提示
+        ])
+        .split(area);
 
+    // 1. 顶部 Header
     let modal_title = if app.edit_target_id.is_some() {
         " ✏️ 编辑备忘录 "
     } else {
         " ➕ 新建备忘录 "
     };
-
-    let main_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(Span::styled(
+    let header_line = Line::from(vec![
+        Span::styled(
+            " 📝 MEMOS ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" 终端备忘录编辑器 ─ "),
+        Span::styled(
             modal_title,
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ));
-    f.render_widget(main_block, area);
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    f.render_widget(Paragraph::new(header_line), chunks[0]);
 
-    let inner_area = Rect {
-        x: area.x + 2,
-        y: area.y + 1,
-        width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(2),
-    };
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // 标题输入框
-            Constraint::Min(6),    // 内容多行输入框
-            Constraint::Length(1), // 底部提示
-        ])
-        .split(inner_area);
-
-    // 1. 标题输入框
+    // 2. 标题输入框 (chunks[1])
     let title_border_color = if app.edit_focus == EditFocus::Title {
         Color::Yellow
     } else {
@@ -333,30 +333,35 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
             " 标题 (必填) ",
             Style::default().fg(title_border_color).add_modifier(Modifier::BOLD),
         ));
-    let p_title = Paragraph::new(app.edit_title.as_str()).block(title_block);
-    f.render_widget(p_title, chunks[0]);
+    let title_inner = title_block.inner(chunks[1]);
+    f.render_widget(title_block, chunks[1]);
+    let p_title = Paragraph::new(app.edit_title.as_str());
+    f.render_widget(p_title, title_inner);
 
-    // 2. 内容输入框
+    // 3. 内容多行输入框 (chunks[2])
     let content_border_color = if app.edit_focus == EditFocus::Content {
         Color::Yellow
     } else {
         Color::DarkGray
     };
 
-    let total_lines = app.edit_lines.len();
-    let visible_content_h = chunks[1].height.saturating_sub(2) as usize;
+    let temp_block = Block::default().borders(Borders::ALL);
+    let content_inner = temp_block.inner(chunks[2]);
+    let content_w = content_inner.width.saturating_sub(1);
+    let layout = app.compute_content_layout(content_w);
+    let visible_content_h = content_inner.height as usize;
 
-    let max_scroll = if total_lines >= visible_content_h && visible_content_h > 0 {
-        total_lines - visible_content_h + 1
+    let max_scroll = if layout.total_visual_lines >= visible_content_h && visible_content_h > 0 {
+        layout.total_visual_lines - visible_content_h + 1
     } else {
         0
     };
     let final_scroll = (app.edit_scroll as usize).min(max_scroll);
 
     let content_title = if final_scroll > 0 {
-        format!(" 内容 (支持多行 / 📜 滚动 +{}) ", final_scroll)
+        format!(" 正文内容 (支持多行 / 📜 滚动 +{}) ", final_scroll)
     } else {
-        " 内容 (支持多行) ".to_string()
+        " 正文内容 (支持多行) ".to_string()
     };
 
     let content_block = Block::default()
@@ -368,38 +373,32 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
             Style::default().fg(content_border_color).add_modifier(Modifier::BOLD),
         ));
 
-    let content_text = app.edit_lines.join("\n");
-    let p_content = Paragraph::new(content_text)
-        .block(content_block)
-        .wrap(Wrap { trim: false })
-        .scroll((final_scroll as u16, 0));
-    f.render_widget(p_content, chunks[1]);
+    f.render_widget(content_block, chunks[2]);
 
-    // 3. 硬件光标精确定位（IME / 中文输入法与任意位置编辑）
+    let content_text = layout.visual_lines.join("\n");
+    let p_content = Paragraph::new(content_text)
+        .scroll((final_scroll as u16, 0));
+    f.render_widget(p_content, content_inner);
+
+    // 4. 硬件光标精确定位（IME / 中文输入法与任意位置编辑）
     match app.edit_focus {
         EditFocus::Title => {
             let before_cursor: String = app.edit_title.chars().take(app.title_cursor).collect();
             let cursor_w = UnicodeWidthStr::width(before_cursor.as_str()) as u16;
-            let cursor_x = (chunks[0].x + 1 + cursor_w).min(chunks[0].right().saturating_sub(2));
-            let cursor_y = chunks[0].y + 1;
+            let cursor_x = (title_inner.x + cursor_w).min(title_inner.right().saturating_sub(1));
+            let cursor_y = title_inner.y;
             f.set_cursor_position((cursor_x, cursor_y));
         }
         EditFocus::Content => {
-            if app.cursor_row < app.edit_lines.len() {
-                let current_line = &app.edit_lines[app.cursor_row];
-                let before_cursor: String = current_line.chars().take(app.cursor_col).collect();
-                let cursor_w = UnicodeWidthStr::width(before_cursor.as_str()) as u16;
-
-                if app.cursor_row >= final_scroll && app.cursor_row < final_scroll + visible_content_h {
-                    let cursor_y = chunks[1].y + 1 + (app.cursor_row - final_scroll) as u16;
-                    let cursor_x = (chunks[1].x + 1 + cursor_w).min(chunks[1].right().saturating_sub(2));
-                    f.set_cursor_position((cursor_x, cursor_y));
-                }
+            if layout.visual_cursor_row >= final_scroll && layout.visual_cursor_row < final_scroll + visible_content_h {
+                let cursor_y = content_inner.y + (layout.visual_cursor_row - final_scroll) as u16;
+                let cursor_x = (content_inner.x + layout.visual_cursor_col as u16).min(content_inner.right().saturating_sub(1));
+                f.set_cursor_position((cursor_x, cursor_y));
             }
         }
     }
 
-    // 4. 操作帮助
+    // 5. 底部操作提示 (chunks[3])
     let tip = Line::from(vec![
         Span::styled("[Tab]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         Span::raw(" 切换标题/内容  "),
@@ -410,7 +409,7 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
         Span::styled("[Esc]", Style::default().fg(Color::DarkGray)),
         Span::raw(" 取消"),
     ]);
-    f.render_widget(Paragraph::new(tip).alignment(Alignment::Center), chunks[2]);
+    f.render_widget(Paragraph::new(tip).alignment(Alignment::Center), chunks[3]);
 }
 
 fn draw_delete_confirm_modal(f: &mut Frame, app: &App) {

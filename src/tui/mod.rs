@@ -22,7 +22,7 @@ pub fn run(db: Database) -> Result<()> {
         stdout,
         EnterAlternateScreen,
         EnableMouseCapture,
-        crossterm::cursor::SetCursorStyle::BlinkingUnderScore
+        crossterm::cursor::SetCursorStyle::BlinkingBar
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -41,7 +41,12 @@ pub fn run(db: Database) -> Result<()> {
 }
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+    let mut prev_mode = app.mode;
     while !app.should_quit {
+        if prev_mode != app.mode {
+            terminal.clear()?;
+            prev_mode = app.mode;
+        }
         terminal.draw(|f| ui::draw(f, app))?;
         event::handle_events(app)?;
     }
