@@ -7,7 +7,7 @@
 `memos` 是一个 Rust 2021 编写的本地备忘录工具，同时提供交互式 TUI 和只读 CLI 列表模式。
 
 - `src/main.rs`：程序入口；解析参数、打开数据库并选择 CLI 或 TUI 模式。
-- `src/cli.rs`：`clap` 参数定义及 `memos --list` 输出。
+- `src/cli.rs`：`clap` 子命令、机器可读输出、stdin 处理及稳定 CLI 错误码。
 - `src/db.rs`：SQLite 初始化、兼容迁移和 CRUD；默认数据库位于系统数据目录。
 - `src/model.rs`：共享领域模型 `Memo`。
 - `src/tui/app.rs`：TUI 状态、筛选、编辑、选择、滚动及数据库操作。

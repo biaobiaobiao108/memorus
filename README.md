@@ -87,29 +87,48 @@ memos
 
 ---
 
-### 2. CLI 极速查看模式
+### 2. CLI 与脚本模式
 
-如果你只想在终端快速瞥一眼最近的备忘录，无需进入 TUI：
+CLI 提供完整的增删改查能力，不带子命令时仍然进入 TUI。旧版的 `memos -l` / `memos --list` 保留为“查看最近 6 条”的兼容入口。
 
 ```bash
-memos -l
-# 或 memos --list
+# 查询
+memos list
+memos list --query "Rust" --limit 10
+memos list --archived
+memos list --all --format jsonl
+memos get 42
+memos get 42 --field content
+
+# 创建与修改
+memos create --title "会议记录" --content "正文"
+printf '多行正文\n第二行\n' | memos create --title "stdin 示例" --content -
+memos update 42 --title "更新后的标题"
+memos update 42 --content - < revised.md
+
+# 归档、恢复与删除
+memos archive 42
+memos restore 42
+memos delete 42 --yes
 ```
 
-**输出示例**：
+全局 `--format` 支持四种输出格式：
 
-```text
-📝 最近备忘录 (最新 6 条):
-──────────────────────────────────────────────────
-  1. [08-18 10:30] 准备周报选题
-  2. [08-17 19:42] 视频脚本大纲
-  3. [08-16 14:15] 购买麦克风支架
-  4. [08-15 09:20] 读书笔记摘录
-  5. [08-14 21:05] 粉丝群活动策划
-  6. [08-13 16:30] 剪辑素材归档
-──────────────────────────────────────────────────
-💡 提示: 运行 `memos` 进入 TUI 查看完整详情或进行编辑
+| 格式 | 用途 |
+| :--- | :--- |
+| `table` | 默认的人类可读输出 |
+| `json` | 单个 JSON 对象或 JSON 数组 |
+| `jsonl` | 每行一个 JSON 对象，适合流式处理 |
+| `plain` | 简洁的制表符分隔输出 |
+
+机器模式只向 stdout 写入结果，错误写入 stderr。`get --field content` 会原样输出正文，不额外添加换行，方便管道处理：
+
+```bash
+memos list --format json | jq '.[].id'
+memos get 42 --field content > memo.md
 ```
+
+CLI 使用稳定退出码：`0` 成功、`1` 运行错误、`2` 参数或输入错误、`3` 记录不存在、`4` 删除缺少 `--yes`。
 
 ---
 
@@ -121,6 +140,13 @@ Memos 默认将 SQLite 数据库存储在操作系统标准数据目录下：
 - **Windows**: `%LOCALAPPDATA%\memos\data\memos.db`
 
 你可以随时备份该 `.db` 文件，迁移简单无负担。
+
+脚本、测试或 Agent 可以使用 `--db` 隔离数据库，也可以设置 `MEMOS_DB_PATH`。命令行参数优先级更高：
+
+```bash
+memos --db /tmp/task-memos.db list --format json
+MEMOS_DB_PATH=./project.db memos create --title "项目笔记"
+```
 
 ---
 

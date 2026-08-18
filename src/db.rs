@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
 use directories::ProjectDirs;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use crate::model::Memo;
 
@@ -171,6 +171,18 @@ impl Database {
         Ok(memos)
     }
 
+    /// 根据 ID 获取单条备忘录
+    pub fn get_by_id(&self, id: i64) -> Result<Option<Memo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, title, content, archived, created_at, updated_at
+             FROM memos
+             WHERE id = ?1",
+        )?;
+
+        let memo = stmt.query_row(params![id], map_memo_row).optional()?;
+        Ok(memo)
+    }
+
     /// 插入一条新备忘录
     pub fn insert(&self, title: &str, content: &str) -> Result<Memo> {
         let now = Local::now();
@@ -220,6 +232,31 @@ impl Database {
     }
 }
 
+fn map_memo_row(row: &Row<'_>) -> rusqlite::Result<Memo> {
+    let id: i64 = row.get(0)?;
+    let title: String = row.get(1)?;
+    let content: String = row.get(2)?;
+    let archived_num: i64 = row.get(3)?;
+    let created_at_str: String = row.get(4)?;
+    let updated_at_str: String = row.get(5)?;
+
+    let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+        .map(|dt| dt.with_timezone(&Local))
+        .unwrap_or_else(|_| Local::now());
+    let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)
+        .map(|dt| dt.with_timezone(&Local))
+        .unwrap_or_else(|_| Local::now());
+
+    Ok(Memo {
+        id,
+        title,
+        content,
+        archived: archived_num != 0,
+        created_at,
+        updated_at,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +273,8 @@ mod tests {
 
         let memo2 = db.insert("测试标题2", "测试内容2")?;
         assert_eq!(memo2.id, 2);
+        assert_eq!(db.get_by_id(memo2.id)?.unwrap(), memo2);
+        assert!(db.get_by_id(999)?.is_none());
 
         // 查全部
         let all = db.get_all()?;
