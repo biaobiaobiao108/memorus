@@ -81,17 +81,8 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .filter_map(|(ui_idx, &real_idx)| {
             let memo = app.memos.get(real_idx)?;
-            let time_str = memo.updated_at.format("%m-%d %H:%M").to_string();
             let is_selected = ui_idx == app.selected_index;
-
             let prefix = if is_selected { "▶ " } else { "  " };
-            let icon = if memo.archived { "📦 " } else { "📝 " };
-            let title_display = if memo.title.chars().count() > 16 {
-                let s: String = memo.title.chars().take(14).collect();
-                format!("{}...", s)
-            } else {
-                memo.title.clone()
-            };
 
             let title_style = if memo.archived {
                 Style::default().fg(Color::DarkGray)
@@ -110,12 +101,7 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
                         Style::default().fg(Color::DarkGray)
                     },
                 ),
-                Span::raw(icon),
-                Span::styled(
-                    format!("[{}] ", time_str),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(title_display, title_style),
+                Span::styled(&memo.title, title_style),
             ]);
 
             Some(ListItem::new(line))
