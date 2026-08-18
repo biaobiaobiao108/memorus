@@ -38,6 +38,8 @@ pub struct App {
     pub memos: Vec<Memo>,
     pub filtered_indices: Vec<usize>,
     pub selected_index: usize,
+    pub list_offset: usize,
+    pub list_viewport: Option<(u16, u16, u16, u16)>,
     pub detail_scroll: u16,
     pub edit_scroll: u16,
     pub list_filter: ListFilter,
@@ -63,6 +65,8 @@ impl App {
             memos: Vec::new(),
             filtered_indices: Vec::new(),
             selected_index: 0,
+            list_offset: 0,
+            list_viewport: None,
             detail_scroll: 0,
             edit_scroll: 0,
             list_filter: ListFilter::Active,
@@ -86,9 +90,24 @@ impl App {
 
     /// 重新从数据库拉取备忘录数据
     pub fn reload_memos(&mut self) -> Result<()> {
+        let selected_id = self.selected_memo().map(|memo| memo.id);
         self.memos = self.db.get_all()?;
         self.apply_filter();
+        if let Some(id) = selected_id {
+            self.select_memo_by_id(id);
+        }
         Ok(())
+    }
+
+    fn select_memo_by_id(&mut self, id: i64) {
+        if let Some(index) = self
+            .filtered_indices
+            .iter()
+            .position(|&real_index| self.memos[real_index].id == id)
+        {
+            self.selected_index = index;
+            self.detail_scroll = 0;
+        }
     }
 
     /// 根据当前归档过滤器和搜索词过滤列表
@@ -119,6 +138,7 @@ impl App {
         } else if self.selected_index >= self.filtered_indices.len() {
             self.selected_index = self.filtered_indices.len().saturating_sub(1);
         }
+        self.list_offset = 0;
         self.detail_scroll = 0;
     }
 
@@ -147,10 +167,17 @@ impl App {
         Ok(())
     }
 
-    pub fn select_at_row(&mut self, row: u16) {
-        // 主体双栏内容区从 y = 1 开始，列表上方有 border (y = 1)，列表项从 y = 2 开始
-        if row >= 2 {
-            let item_idx = (row - 2) as usize;
+    pub fn select_at_position(&mut self, column: u16, row: u16) {
+        let Some((x, y, width, height)) = self.list_viewport else {
+            return;
+        };
+
+        if column >= x
+            && column < x.saturating_add(width)
+            && row >= y
+            && row < y.saturating_add(height)
+        {
+            let item_idx = self.list_offset + row.saturating_sub(y) as usize;
             if item_idx < self.filtered_indices.len() {
                 self.selected_index = item_idx;
                 self.detail_scroll = 0;
@@ -191,7 +218,9 @@ impl App {
     }
 
     pub fn move_down(&mut self) {
-        if !self.filtered_indices.is_empty() && self.selected_index + 1 < self.filtered_indices.len() {
+        if !self.filtered_indices.is_empty()
+            && self.selected_index + 1 < self.filtered_indices.len()
+        {
             self.selected_index += 1;
             self.detail_scroll = 0;
         }
@@ -347,13 +376,8 @@ impl App {
             self.edit_target_id = Some(memo.id);
             self.edit_title = memo.title;
             self.title_cursor = self.edit_title.chars().count();
-            
-            let lines: Vec<String> = memo.content.lines().map(|s| s.to_string()).collect();
-            self.edit_lines = if lines.is_empty() {
-                vec![String::new()]
-            } else {
-                lines
-            };
+
+            self.edit_lines = memo.content.split('\n').map(str::to_string).collect();
             self.cursor_row = self.edit_lines.len().saturating_sub(1);
             self.cursor_col = self.edit_lines[self.cursor_row].chars().count();
             self.edit_focus = EditFocus::Title;
@@ -376,17 +400,20 @@ impl App {
 
         let content = self.get_combined_content();
 
-        if let Some(id) = self.edit_target_id {
+        let saved_id = if let Some(id) = self.edit_target_id {
             self.db.update(id, title, &content)?;
             self.set_status("✅ 备忘录修改已保存");
+            id
         } else {
             let title = title.to_string();
-            self.db.insert(&title, &content)?;
+            let memo = self.db.insert(&title, &content)?;
             self.set_status("✅ 新建备忘录成功");
-        }
+            memo.id
+        };
 
         self.mode = AppMode::Normal;
         self.reload_memos()?;
+        self.select_memo_by_id(saved_id);
         Ok(())
     }
 
@@ -619,7 +646,13 @@ impl App {
     }
 
     /// 处理在编辑弹窗中的鼠标点击定位光标
-    pub fn click_edit_modal(&mut self, click_x: u16, click_y: u16, title_inner: (u16, u16, u16, u16), content_inner: (u16, u16, u16, u16)) {
+    pub fn click_edit_modal(
+        &mut self,
+        click_x: u16,
+        click_y: u16,
+        title_inner: (u16, u16, u16, u16),
+        content_inner: (u16, u16, u16, u16),
+    ) {
         let (tx, ty, tw, th) = title_inner;
         let (cx, cy, cw, ch) = content_inner;
 
@@ -649,7 +682,8 @@ impl App {
         // 点击在内容框
         if click_x >= cx && click_x < cx + cw && click_y >= cy && click_y < cy + ch {
             self.edit_focus = EditFocus::Content;
-            let target_visual_row = (self.edit_scroll as usize) + (click_y.saturating_sub(cy) as usize);
+            let target_visual_row =
+                (self.edit_scroll as usize) + (click_y.saturating_sub(cy) as usize);
             let target_visual_col = click_x.saturating_sub(cx) as usize;
             let max_w = (cw as usize).max(1);
 
@@ -683,18 +717,16 @@ impl App {
                         cur_w = 0;
                     }
 
-                    if cur_visual_row == target_visual_row {
-                        if target_visual_col < cur_w + char_w {
-                            if target_visual_col <= cur_w + char_w / 2 {
-                                self.cursor_row = r_idx;
-                                self.cursor_col = c_idx;
-                            } else {
-                                self.cursor_row = r_idx;
-                                self.cursor_col = c_idx + 1;
-                            }
-                            found = true;
-                            break;
+                    if cur_visual_row == target_visual_row && target_visual_col < cur_w + char_w {
+                        if target_visual_col <= cur_w + char_w / 2 {
+                            self.cursor_row = r_idx;
+                            self.cursor_col = c_idx;
+                        } else {
+                            self.cursor_row = r_idx;
+                            self.cursor_col = c_idx + 1;
                         }
+                        found = true;
+                        break;
                     }
 
                     cur_w += char_w;
@@ -790,7 +822,10 @@ mod tests {
         assert_eq!(app.mode, AppMode::Normal);
         assert_eq!(app.memos.len(), 1);
         assert_eq!(app.selected_memo().unwrap().title, "第一条备忘录");
-        assert_eq!(app.selected_memo().unwrap().content, "第一行内容\n第二行内容");
+        assert_eq!(
+            app.selected_memo().unwrap().content,
+            "第一行内容\n第二行内容"
+        );
 
         // 2. 新建第二条
         app.start_create();
@@ -819,7 +854,7 @@ mod tests {
         app.start_edit();
         assert_eq!(app.mode, AppMode::Editing);
         assert!(app.edit_target_id.is_some());
-        
+
         // 移动光标并修改
         app.move_cursor_home();
         app.insert_char('★');
@@ -921,5 +956,55 @@ mod tests {
 
         Ok(())
     }
-}
 
+    #[test]
+    fn test_edit_preserves_content_and_selection() -> Result<()> {
+        let db = Database::open_in_memory()?;
+        db.insert("第一条", "普通正文")?;
+        db.insert("保留空行", "正文\n\n")?;
+        db.insert("第三条", "其他正文")?;
+
+        let mut app = App::new(db)?;
+        let target_index = app
+            .filtered_indices
+            .iter()
+            .position(|&index| app.memos[index].title == "保留空行")
+            .unwrap();
+        app.selected_index = target_index;
+        let target_id = app.selected_memo().unwrap().id;
+
+        app.start_edit();
+        assert_eq!(app.get_combined_content(), "正文\n\n");
+
+        std::thread::sleep(Duration::from_millis(2));
+        app.save_edit()?;
+
+        let selected = app.selected_memo().unwrap();
+        assert_eq!(selected.id, target_id);
+        assert_eq!(selected.content, "正文\n\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_mouse_selection_respects_viewport_and_offset() -> Result<()> {
+        let db = Database::open_in_memory()?;
+        for index in 0..12 {
+            db.insert(&format!("备忘录 {index}"), "")?;
+        }
+
+        let mut app = App::new(db)?;
+        app.list_viewport = Some((1, 2, 20, 4));
+        app.list_offset = 5;
+        app.selected_index = 0;
+
+        app.select_at_position(5, 3);
+        assert_eq!(app.selected_index, 6);
+
+        app.select_at_position(30, 3);
+        assert_eq!(app.selected_index, 6);
+
+        app.select_at_position(5, 8);
+        assert_eq!(app.selected_index, 6);
+        Ok(())
+    }
+}

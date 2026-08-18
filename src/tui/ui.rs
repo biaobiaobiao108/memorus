@@ -2,9 +2,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{
-        Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap,
-    },
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 
@@ -53,17 +51,33 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let archived_count = app.memos.len().saturating_sub(active_count);
 
     let header_text = Line::from(vec![
-        Span::styled(" 📝 MEMOS ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " 📝 MEMOS ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" 极速终端备忘录"),
         Span::styled("   📝 活动: ", Style::default().fg(Color::Yellow)),
-        Span::styled(active_count.to_string(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            active_count.to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled("   📦 归档: ", Style::default().fg(Color::Green)),
-        Span::styled(archived_count.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            archived_count.to_string(),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]);
     f.render_widget(Paragraph::new(header_text), area);
 }
 
-fn draw_list(f: &mut Frame, app: &App, area: Rect) {
+fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let base_title = match app.list_filter {
         crate::tui::app::ListFilter::Active => " 📝 备忘录列表",
         crate::tui::app::ListFilter::Archived => " 📦 已归档备忘录",
@@ -72,7 +86,12 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
     let list_title = if app.search_query.is_empty() {
         format!(" {} ({}) ", base_title, app.filtered_indices.len())
     } else {
-        format!(" {} 搜索结果 ({}/{}) ", base_title, app.filtered_indices.len(), app.memos.len())
+        format!(
+            " {} 搜索结果 ({}/{}) ",
+            base_title,
+            app.filtered_indices.len(),
+            app.memos.len()
+        )
     };
 
     let items: Vec<ListItem> = app
@@ -87,7 +106,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
             let title_style = if memo.archived {
                 Style::default().fg(Color::DarkGray)
             } else if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -96,7 +117,9 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(
                     prefix,
                     if is_selected {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     },
@@ -114,10 +137,20 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
             list_title,
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ));
+    let list_inner = list_block.inner(area);
+    app.list_viewport = Some((
+        list_inner.x,
+        list_inner.y,
+        list_inner.width,
+        list_inner.height,
+    ));
 
     if items.is_empty() {
+        app.list_offset = 0;
         let empty_tip = if app.list_filter == crate::tui::app::ListFilter::Archived {
             "📦 暂无归档备忘录\n按 [Tab] 返回活动列表"
         } else if app.memos.is_empty() {
@@ -131,17 +164,17 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect) {
             .style(Style::default().fg(Color::DarkGray));
         f.render_widget(p, area);
     } else {
-        let mut state = ListState::default();
-        state.select(Some(app.selected_index));
+        let mut state = ListState::default()
+            .with_offset(app.list_offset)
+            .with_selected(Some(app.selected_index));
 
-        let list_widget = List::new(items)
-            .block(list_block)
-            .highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(35, 45, 60))
-                    .add_modifier(Modifier::BOLD),
-            );
+        let list_widget = List::new(items).block(list_block).highlight_style(
+            Style::default()
+                .bg(Color::Rgb(35, 45, 60))
+                .add_modifier(Modifier::BOLD),
+        );
         f.render_stateful_widget(list_widget, area, &mut state);
+        app.list_offset = state.offset();
     }
 }
 
@@ -158,7 +191,9 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Span::styled(
             scroll_hint,
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ));
 
     if let Some(memo) = app.selected_memo() {
@@ -167,8 +202,18 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
 
         let mut lines = vec![
             Line::from(vec![
-                Span::styled("📌 标题: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled(&memo.title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "📌 标题: ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    &memo.title,
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]),
             Line::from(vec![
                 Span::styled("🕒 创建: ", Style::default().fg(Color::DarkGray)),
@@ -182,7 +227,12 @@ fn draw_detail(f: &mut Frame, app: &App, area: Rect) {
         if memo.archived {
             lines.push(Line::from(vec![
                 Span::styled("📦 状态: ", Style::default().fg(Color::DarkGray)),
-                Span::styled("已归档", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "已归档",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]));
         }
 
@@ -236,9 +286,17 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         f.set_cursor_position((cursor_x, cursor_y));
 
         let search_line = Line::from(vec![
-            Span::styled(prefix, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                prefix,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(&app.search_query, Style::default().fg(Color::Yellow)),
-            Span::styled(" (按 Enter 锁定，Esc 取消)", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                " (按 Enter 锁定，Esc 取消)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ]);
         f.render_widget(Paragraph::new(search_line), area);
         return;
@@ -251,17 +309,45 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let help_line = Line::from(vec![
-        Span::styled("[Tab]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[Tab]",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("切换备忘/归档 "),
-        Span::styled("[g]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[g]",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(archive_action_text),
-        Span::styled("[a]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[a]",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("新建 "),
-        Span::styled("[e]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[e]",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("编辑 "),
-        Span::styled("[d]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[d]",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
         Span::raw("删除 "),
-        Span::styled("[/]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[/]",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("搜索 "),
         Span::styled("[滚轮/Space/u]", Style::default().fg(Color::Yellow)),
         Span::raw("翻页 "),
@@ -300,7 +386,9 @@ fn draw_editor_page(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(" 终端备忘录编辑器 ─ "),
         Span::styled(
             modal_title,
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
     ]);
     f.render_widget(Paragraph::new(header_line), chunks[0]);
@@ -317,7 +405,9 @@ fn draw_editor_page(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(title_border_color))
         .title(Span::styled(
             " 标题 (必填) ",
-            Style::default().fg(title_border_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(title_border_color)
+                .add_modifier(Modifier::BOLD),
         ));
     let title_inner = title_block.inner(chunks[1]);
     f.render_widget(title_block, chunks[1]);
@@ -356,14 +446,15 @@ fn draw_editor_page(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(content_border_color))
         .title(Span::styled(
             content_title,
-            Style::default().fg(content_border_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(content_border_color)
+                .add_modifier(Modifier::BOLD),
         ));
 
     f.render_widget(content_block, chunks[2]);
 
     let content_text = layout.visual_lines.join("\n");
-    let p_content = Paragraph::new(content_text)
-        .scroll((final_scroll as u16, 0));
+    let p_content = Paragraph::new(content_text).scroll((final_scroll as u16, 0));
     f.render_widget(p_content, content_inner);
 
     // 4. 硬件光标精确定位（IME / 中文输入法与任意位置编辑）
@@ -376,9 +467,12 @@ fn draw_editor_page(f: &mut Frame, app: &App, area: Rect) {
             f.set_cursor_position((cursor_x, cursor_y));
         }
         EditFocus::Content => {
-            if layout.visual_cursor_row >= final_scroll && layout.visual_cursor_row < final_scroll + visible_content_h {
+            if layout.visual_cursor_row >= final_scroll
+                && layout.visual_cursor_row < final_scroll + visible_content_h
+            {
                 let cursor_y = content_inner.y + (layout.visual_cursor_row - final_scroll) as u16;
-                let cursor_x = (content_inner.x + layout.visual_cursor_col as u16).min(content_inner.right().saturating_sub(1));
+                let cursor_x = (content_inner.x + layout.visual_cursor_col as u16)
+                    .min(content_inner.right().saturating_sub(1));
                 f.set_cursor_position((cursor_x, cursor_y));
             }
         }
@@ -386,11 +480,26 @@ fn draw_editor_page(f: &mut Frame, app: &App, area: Rect) {
 
     // 5. 底部操作提示 (chunks[3])
     let tip = Line::from(vec![
-        Span::styled("[Tab]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[Tab]",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" 切换标题/内容  "),
-        Span::styled("[滚轮/PageUp/Down]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[滚轮/PageUp/Down]",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" 滚动长文  "),
-        Span::styled("[Ctrl+S]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "[Ctrl+S]",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" 保存  "),
         Span::styled("[Esc]", Style::default().fg(Color::DarkGray)),
         Span::raw(" 取消"),
@@ -420,13 +529,24 @@ fn draw_delete_confirm_modal(f: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(vec![
             Span::raw("确定要删除备忘录「"),
-            Span::styled(title_preview, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                title_preview,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw("」吗？"),
         ]),
-        Line::from(Span::styled("此操作不可恢复！", Style::default().fg(Color::Red))),
+        Line::from(Span::styled(
+            "此操作不可恢复！",
+            Style::default().fg(Color::Red),
+        )),
         Line::from(""),
         Line::from(vec![
-            Span::styled("[y / Enter] 确认删除", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[y / Enter] 确认删除",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
             Span::raw("    "),
             Span::styled("[n / Esc] 取消", Style::default().fg(Color::Gray)),
         ]),

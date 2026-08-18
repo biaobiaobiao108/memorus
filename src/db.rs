@@ -72,9 +72,10 @@ impl Database {
         )?;
 
         // 2. 兼容已有旧数据库自动迁移升级：确保存在 archived 列
-        let _ = self
-            .conn
-            .execute("ALTER TABLE memos ADD COLUMN archived INTEGER NOT NULL DEFAULT 0", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE memos ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
 
         // 3. 创建各字段索引（确保 archived 列存在后再建索引）
         self.conn.execute_batch(
@@ -299,4 +300,3 @@ mod tests {
         Ok(())
     }
 }
-

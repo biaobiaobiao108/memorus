@@ -12,7 +12,7 @@ pub fn handle_events(app: &mut App) -> Result<()> {
             Event::Mouse(mouse) => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => match app.mode {
                     AppMode::Normal => {
-                        app.select_at_row(mouse.row);
+                        app.select_at_position(mouse.column, mouse.row);
                     }
                     AppMode::Editing => {
                         if let Ok((term_w, term_h)) = crossterm::terminal::size() {
