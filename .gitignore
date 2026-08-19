@@ -16,6 +16,7 @@
 # Operating system files
 .DS_Store
 Thumbs.db
+*:Zone.Identifier
 
 # Local environment files
 .env
