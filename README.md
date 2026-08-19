@@ -22,7 +22,25 @@
 
 ## 📦 安装方法
 
-### 方式一：从源码直接安装（推荐）
+### 方式一：下载预编译可执行文件（开箱即用）
+
+前往 [GitHub Releases](../../releases) 下载对应系统的单一可执行文件，无需安装任何依赖：
+
+- **Windows 64位**：下载 `memos-windows-x86_64.exe`，直接在命令提示符或 PowerShell 中运行。
+- **macOS (Apple Silicon M系列芯片)**：下载 `memos-macos-arm64`，赋予可执行权限后即可运行：
+  ```bash
+  chmod +x memos-macos-arm64
+  # 可选：移动到系统 PATH 路径
+  sudo mv memos-macos-arm64 /usr/local/bin/memos
+  ```
+- **Debian / Ubuntu (Linux 64位)**：下载 `memos-linux-x86_64`，赋予可执行权限后即可运行：
+  ```bash
+  chmod +x memos-linux-x86_64
+  # 可选：移动到系统 PATH 路径
+  sudo mv memos-linux-x86_64 /usr/local/bin/memos
+  ```
+
+### 方式二：从源码直接安装
 
 确保已安装 [Rust 与 Cargo](https://rustup.rs/)：
 
@@ -35,7 +53,7 @@ cd memos
 cargo install --path .
 ```
 
-### 方式二：本地编译运行
+### 方式三：本地编译运行
 
 ```bash
 cargo build --release
